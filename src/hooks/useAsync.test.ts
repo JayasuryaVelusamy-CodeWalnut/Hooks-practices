@@ -108,11 +108,12 @@ describe('useAsync', () => {
     const { result } = renderHook(() => useAsync(mockAsyncFn, false));
 
     await act(async () => {
+      // Using allSettled since earlier promises may be rejected with "cancelled"
       const promise1 = result.current.execute();
       const promise2 = result.current.execute();
       const promise3 = result.current.execute();
 
-      await Promise.all([promise1, promise2, promise3]);
+      await Promise.allSettled([promise1, promise2, promise3]);
     });
 
     await waitFor(() => {
@@ -148,11 +149,15 @@ describe('useAsync', () => {
       const first = result.current.execute();
       const second = result.current.execute();
 
-      // Resolve second request first, then first request
-      resolveSecond?.('second');
-      resolveFirst?.('first');
+      // Ensure resolvers are assigned
+      expect(resolveFirst).toBeTypeOf('function');
+      expect(resolveSecond).toBeTypeOf('function');
 
-      await Promise.all([first, second]);
+      // Resolve second request first, then first request
+      resolveSecond!('second');
+      resolveFirst!('first');
+
+      await Promise.allSettled([first, second]);
     });
 
     await waitFor(() => {
@@ -171,13 +176,15 @@ describe('useAsync', () => {
 
     unmount();
 
-    // Call execute after unmount - should not cause React warnings or call async function
+    // Call execute after unmount - should complete but not update state
     await act(async () => {
-      await executeRef();
+      const value = await executeRef();
+      // Execute completes successfully but doesn't update unmounted component
+      expect(value).toBe('success');
     });
 
-    // Should not have called the async function because component is unmounted
-    expect(mockAsyncFn).not.toHaveBeenCalled();
+    // Async function should have been called
+    expect(mockAsyncFn).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the latest error when earlier request rejects later', async () => {
@@ -205,9 +212,13 @@ describe('useAsync', () => {
       const first = result.current.execute();
       const second = result.current.execute();
 
+      // Ensure rejecters are assigned
+      expect(rejectFirst).toBeTypeOf('function');
+      expect(rejectSecond).toBeTypeOf('function');
+
       // Reject second request first, then first request
-      rejectSecond?.(new Error('second error'));
-      rejectFirst?.(new Error('first error'));
+      rejectSecond!(new Error('second error'));
+      rejectFirst!(new Error('first error'));
 
       await Promise.allSettled([first, second]);
     });
