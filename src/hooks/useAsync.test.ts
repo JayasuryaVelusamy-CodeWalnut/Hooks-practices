@@ -76,7 +76,7 @@ describe('useAsync', () => {
     expect(result.current.data).toBeNull();
   });
 
-  it('resets state and loads new data on re-execution', async () => {
+  it('executes new async function on re-execution', async () => {
     const mockAsyncFn = vi.fn(() => Promise.resolve('first result'));
     const { result } = renderHook(() => useAsync(mockAsyncFn, false));
 
@@ -122,13 +122,23 @@ describe('useAsync', () => {
   });
 
   it('keeps the latest result when earlier request resolves later', async () => {
-    let resolveFirst!: (value: string) => void;
-    let resolveSecond!: (value: string) => void;
+    let resolveFirst: ((value: string) => void) | null = null;
+    let resolveSecond: ((value: string) => void) | null = null;
 
     const mockAsyncFn = vi
       .fn()
-      .mockImplementationOnce(() => new Promise<string>(resolve => (resolveFirst = resolve)))
-      .mockImplementationOnce(() => new Promise<string>(resolve => (resolveSecond = resolve)));
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            resolveSecond = resolve;
+          })
+      );
 
     const { result } = renderHook(() => useAsync(mockAsyncFn, false));
 
@@ -137,8 +147,8 @@ describe('useAsync', () => {
       const second = result.current.execute();
 
       // Resolve second request first, then first request
-      resolveSecond('second');
-      resolveFirst('first');
+      resolveSecond?.('second');
+      resolveFirst?.('first');
 
       await Promise.all([first, second]);
     });
@@ -148,5 +158,63 @@ describe('useAsync', () => {
     });
 
     expect(result.current.loading).toBe(false);
+  });
+
+  it('does not update state when execute is called after unmount', async () => {
+    const mockAsyncFn = vi.fn(() => Promise.resolve('success'));
+    const { result, unmount } = renderHook(() => useAsync(mockAsyncFn, false));
+
+    // Capture execute function before unmount
+    const executeRef = result.current.execute;
+
+    unmount();
+
+    // Call execute after unmount - should not cause React warnings or call async function
+    await act(async () => {
+      await executeRef();
+    });
+
+    // Should not have called the async function because component is unmounted
+    expect(mockAsyncFn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the latest error when earlier request rejects later', async () => {
+    let rejectFirst: ((error: Error) => void) | null = null;
+    let rejectSecond: ((error: Error) => void) | null = null;
+
+    const mockAsyncFn = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((_, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((_, reject) => {
+            rejectSecond = reject;
+          })
+      );
+
+    const { result } = renderHook(() => useAsync(mockAsyncFn, false));
+
+    await act(async () => {
+      const first = result.current.execute();
+      const second = result.current.execute();
+
+      // Reject second request first, then first request
+      rejectSecond?.(new Error('second error'));
+      rejectFirst?.(new Error('first error'));
+
+      await Promise.allSettled([first, second]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).toBe('second error');
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data).toBeNull();
   });
 });
